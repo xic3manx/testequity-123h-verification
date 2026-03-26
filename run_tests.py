@@ -29,14 +29,30 @@ from models.chamber_system import ChamberSystem
 from api.flow_client import FlowClient
 from api.jira_client import JiraClient
 
-# Flow design value IDs → model parameter names
-FLOW_VALUE_MAP = {
+# Flow design value IDs → model INPUT parameter names
+FLOW_INPUT_MAP = {
     1: "heater_power_w",
     2: "compressor_capacity_w",
     3: "max_temp_target_c",
     4: "sensor_mtbf_hrs",
     5: "relay_mtbf_hrs",
     6: "compressor_mtbf_hrs",
+}
+
+# Requirement ID → Flow design value ID for pushing computed OUTPUTS
+FLOW_OUTPUT_MAP = {
+    26: 13,  # max_temp_achieved_c
+    27: 14,  # min_temp_achieved_c
+    28: 15,  # temp_accuracy_measured_c
+    29: 16,  # max_rh_achieved_pct
+    30: 17,  # min_rh_achieved_pct
+    31: 18,  # humidity_accuracy_measured_pct
+    32: 19,  # heat_ramp_rate_actual
+    33: 20,  # cool_rate_actual
+    34: 21,  # uniformity_delta_c
+    35: 22,  # total_power_actual_w
+    37: 23,  # humidity_sensor_mtbf_actual
+    39: 24,  # r90c90_actual_hrs
 }
 
 
@@ -46,7 +62,7 @@ def print_banner(text: str):
 
 
 def pull_design_values(dry_run: bool) -> dict[str, float]:
-    """Read design values from Flow and return as named parameters."""
+    """Read input design values from Flow and return as named parameters."""
     if dry_run:
         print("  [DRY RUN] Using default model parameters")
         return {}
@@ -54,10 +70,10 @@ def pull_design_values(dry_run: bool) -> dict[str, float]:
         flow = FlowClient(dry_run=False)
         raw = flow.get_design_values()
         params = {}
-        for vid, param_name in FLOW_VALUE_MAP.items():
+        for vid, param_name in FLOW_INPUT_MAP.items():
             if vid in raw:
                 params[param_name] = raw[vid]
-                print(f"  Flow value {vid} ({param_name}) = {raw[vid]}")
+                print(f"  VAL-{vid} ({param_name}) = {raw[vid]}")
         return params
     except Exception as e:
         print(f"  [WARN] Could not read Flow values: {e}")
@@ -112,7 +128,15 @@ def push_to_flow(results: dict[int, float], dry_run: bool):
     print_banner("Pushing Results to Flow Engineering")
     flow = FlowClient(dry_run=dry_run)
 
-    # Push computed requirement values back to Flow
+    # Push computed outputs back to Flow design values (VAL-13 through VAL-24)
+    print("  Pushing computed outputs to Flow design values...")
+    for req_id, val_id in FLOW_OUTPUT_MAP.items():
+        if req_id in results:
+            measured = round(results[req_id], 4)
+            print(f"    Req {req_id} → VAL-{val_id} = {measured}")
+            flow.update_design_value(val_id, measured)
+
+    # Also update requirement values directly
     print("  Updating requirement values...")
     if not dry_run:
         value_updates = [
@@ -133,9 +157,9 @@ def push_to_flow(results: dict[int, float], dry_run: bool):
         print(f"    TC {tc_id} ({tc_info['name'][:40]}): {status}")
         flow.create_test_run(tc_id, status)
 
-    # Push computed R90/C90 back to Flow design value #7
+    # Also push R90/C90 to the original system_r90c90_hrs value (VAL-7)
     r90c90 = results.get(39, 0)
-    print(f"\n  Pushing R90/C90 = {r90c90:.0f} hrs → Flow design value #7")
+    print(f"\n  Pushing R90/C90 = {r90c90:.0f} hrs → VAL-7")
     flow.update_design_value(7, round(r90c90))
 
 
